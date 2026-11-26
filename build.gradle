@@ -1,0 +1,70 @@
+plugins {
+    id 'maven-publish'
+}
+
+group = 'io.github.vhdlivery.osvvm'
+version = providers.gradleProperty('packageVersion').getOrElse('0.0.0-SNAPSHOT')
+
+def osvvmSources = layout.projectDirectory.dir('upstream/osvvm')
+def requiredSources = [
+    osvvmSources.file('OsvvmLibraries.pro').asFile,
+    osvvmSources.file('osvvm/AlertLogPkg.vhd').asFile,
+    osvvmSources.file('Scripts/StartUp.tcl').asFile
+]
+
+def srcZip = tasks.register('srcZip', Zip) {
+    archiveBaseName = project.name
+    archiveVersion = project.version.toString()
+    archiveClassifier = 'src'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+
+    from(osvvmSources) {
+        into("osvvm-${project.version}/osvvm")
+        exclude '**/.git', '**/.git/**'
+    }
+}
+
+def verifyOsvvmSources = tasks.register('verifyOsvvmSources') {
+    doLast {
+        if (!requiredSources.every { it.isFile() }) {
+            throw new GradleException('OSVVM sources are missing. Run git submodule update --init --recursive.')
+        }
+        def components = providers.exec {
+            workingDir osvvmSources.asFile
+            commandLine 'git', 'submodule', 'status', '--recursive'
+        }.standardOutput.asText.get().readLines()
+        if (components.any { !it.startsWith(' ') }) {
+            throw new GradleException('OSVVM components must match the upstream gitlinks. Run git submodule update --init --recursive.')
+        }
+    }
+}
+srcZip.configure { dependsOn(verifyOsvvmSources) }
+
+publishing {
+    publications {
+        osvvm(MavenPublication) {
+            artifact(srcZip)
+            pom {
+                name = 'OSVVM VHDL sources'
+                description = 'Complete OSVVM upstream source tree packaged for Gradle VHDL consumers.'
+                url = 'https://github.com/OSVVM/OsvvmLibraries'
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = 'Build'
+            url = layout.buildDirectory.dir('repository')
+        }
+        maven {
+            name = 'GitHubPackages'
+            url = uri('https://maven.pkg.github.com/vhdlivery/gradle-osvvm')
+            credentials {
+                username = providers.environmentVariable('GITHUB_ACTOR').orNull
+                password = providers.environmentVariable('GITHUB_TOKEN').orNull
+            }
+        }
+    }
+}
